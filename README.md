@@ -2,14 +2,13 @@
 by Scott Howard Swain
 
 ## Application overview
-Automates “cleaning” of synchronized dual-video recordings (host + guest) while keeping host/guest perfectly aligned.
+Automates “cleaning” of a host/guest type video recording while keeping audio and video in sync.
 
 Features:
 - **Removes filler words**: Detects configured filler words from `config.py` and mutes them during processing. Depending on length of silence (including surrounding silence), the muted area may be cut in the `Cuts pauses` step.
-- **Normalizes guest loudness** to match the host (or to a standard LUFS target).
-- **Reduces volume spikes** in the guest track above a configured threshold.
-- **Cuts pauses**: Shortens long mutual-silence pauses to a configurable minimum duration by removing the excess.
-- **Maintains sync** by applying the same keep/remove decisions to both videos.
+- **Normalizes loudness** may be just a placeholder for now as it is legacy functionality for getting audio streams of two videos in sync.
+- **Reduces volume spikes** in the audio track above a configured threshold.
+- **Cuts pauses**: Shortens long silence pauses to a configurable minimum duration by removing the excess.
 
 Notes:
 - The processing pipeline is detector/processor-based so behavior can be extended without rewriting the full flow.
@@ -20,12 +19,9 @@ flowchart LR
     A[Probe media] --> B[Detect events]
     B --> C[Mute filler words]
     C --> D[Cut pauses]
-    D --> E[Normalize guest loudness]
-    E --> F[Reduce guest volume spikes]
-    F --> G[Render host output]
-    F --> H[Render guest output]
-    G --> I[Aligned processed pair]
-    H --> I
+    D --> E[Normalize loudness]
+    E --> F[Reduce volume spikes]
+    F --> G[Render output]
 ```
 
 ## Requirements
