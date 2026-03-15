@@ -2,27 +2,17 @@
 by Scott Howard Swain
 
 ## Application overview
-Automates “cleaning” of a host/guest type video recording while keeping audio and video in sync.
+Automates cleanup of a single recorded video while keeping that video's audio and video in sync.
 
 Features:
-- **Removes filler words**: Detects configured filler words from `config.py` and mutes them during processing. Depending on length of silence (including surrounding silence), the muted area may be cut in the `Cuts pauses` step.
-- **Normalizes loudness** may be just a placeholder for now as it is legacy functionality for getting audio streams of two videos in sync.
-- **Reduces volume spikes** in the audio track above a configured threshold.
-- **Cuts pauses**: Shortens long silence pauses to a configurable minimum duration by removing the excess.
+- **Removes filler words**: Detects configured filler words from `config.py` and mutes them during processing. Depending on surrounding silence, those muted spans can also be shortened by pause removal.
+- **Normalizes loudness**: Applies the configured single-track loudness workflow to the input video's audio.
+- **Reduces volume spikes**: Detects and corrects sharp peaks in the audio track above the configured threshold.
+- **Cuts pauses**: Shortens long silent sections to a configurable minimum duration.
 
 Notes:
 - The processing pipeline is detector/processor-based so behavior can be extended without rewriting the full flow.
-- Most behavior is controlled via `config.py`, including enabled processors and the filler words list.
-
-```mermaid
-flowchart LR
-    A[Probe media] --> B[Detect events]
-    B --> C[Mute filler words]
-    C --> D[Cut pauses]
-    D --> E[Normalize loudness]
-    E --> F[Reduce volume spikes]
-    F --> G[Render output]
-```
+- Most behavior is controlled via `config.py`, including enabled processors, render settings, and the filler words list.
 
 ## Requirements
 1) Python >= 3.13
@@ -33,11 +23,10 @@ flowchart LR
 
 ## Commands
 1) Run GUI: `py app.py`
-2) Run CLI: `python main.py process --host path/to/host.mp4 --guest path/to/guest.mp4`
-3) Override normalization mode: `python main.py process --host ... --guest ... --norm-mode MATCH_HOST|STANDARD_LUFS`
+2) Run CLI: `python main.py process --input path/to/video.mp4`
 
 ## Configuration
-Edit `config.py` to change thresholds (spikes/silence), normalization behavior, rendering options, enabled processors, and the filler words to detect/mute.
+Edit `config.py` to change thresholds, normalization behavior, rendering options, enabled processors, and the filler words to detect/mute.
 
 ## Secrets
 - Keep non-secret app behavior in `config.py`.
@@ -45,9 +34,15 @@ Edit `config.py` to change thresholds (spikes/silence), normalization behavior, 
 - The app loads `.env` automatically on startup for both `python app.py` and `python main.py process ...`.
 - Read values in Python with `os.getenv("YOUR_SECRET_NAME")`.
 
+## Workflow
+1) Select one input video.
+2) Run the GUI or `python main.py process --input path/to/video.mp4`.
+3) The pipeline extracts one audio track, runs the enabled detectors and processors, then renders one processed video.
+4) The default output path is created next to the input file with a `_processed.mp4` suffix.
+
 ## Output
-- The tool always renders a processed host + processed guest pair to preserve alignment.
-- Outputs are written as MP4 (even if inputs are AVI/MKV/etc.).
+- The tool renders one processed output file per run.
+- Outputs are written as MP4 even if the source input used another container such as AVI or MKV.
 
 ## Limitations / performance
 1) Audio extraction can load entire audio into RAM on long videos.

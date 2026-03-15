@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
+from io_.media_probe import get_video_duration_seconds
 from io_.video_renderer_progress import run_with_progress  # noqa: F401 — re-exported for callers
 from utils.logger import get_logger
 
@@ -179,11 +180,53 @@ def select_enc_opts(config, caps):
     return build_cpu_enc_opts(config)
 
 
+def _apply_cut_fades(seg_a, idx: int, n_segs: int, seg_dur: float, cut_fade_s: float):
+    """Apply afade in/out to an audio trim segment to soften cut splice points.
+
+    A short fade-in is added at the start of every segment that follows a cut
+    (all but the first). A short fade-out is added at the end of every segment
+    that precedes a cut (all but the last). Together these eliminate the
+    click/pop artefact caused by the abrupt sample discontinuity at an atrim edge.
+
+    Args:
+        seg_a:      ffmpeg-python audio stream node for the segment.
+        idx:        Zero-based index of this segment in the full keep_segments list.
+        n_segs:     Total number of keep_segments being rendered.
+        seg_dur:    Duration in seconds of this segment (end - start).
+        cut_fade_s: Fade duration in seconds (0.0 → no fades applied).
+
+    Returns:
+        The same or a modified ffmpeg-python audio stream node.
+    """
+    if cut_fade_s <= 0:
+        return seg_a
+
+    needs_fade_in = idx > 0            # segment starts immediately after a cut
+    needs_fade_out = idx < n_segs - 1  # segment ends immediately before a cut
+
+    # Guard: segment must be long enough to accommodate all requested fades.
+    needed = cut_fade_s * (needs_fade_in + needs_fade_out)
+    if seg_dur <= needed:
+        logger.debug(
+            "_apply_cut_fades: segment %d (%.3fs) too short for %.3fs cut-edge fades; skipping",
+            idx, seg_dur, cut_fade_s,
+        )
+        return seg_a
+
+    if needs_fade_in:
+        seg_a = seg_a.filter_("afade", t="in", st=0, d=cut_fade_s)
+    if needs_fade_out:
+        seg_a = seg_a.filter_("afade", t="out", st=seg_dur - cut_fade_s, d=cut_fade_s)
+
+    return seg_a
+
+
 def _build_filter_chain(
     input_path: str,
     filters: list,
     keep_segments: list,
     input_kwargs: dict,
+    cut_fade_s: float = 0.0,
 ) -> tuple:
     """Build ffmpeg-python video + audio streams for one input file.
 
@@ -256,6 +299,9 @@ def _build_filter_chain(
             # Audio Trim (Must match exactly)
             a_in = audio_inputs[idx] if audio_inputs is not None else a
             seg_a = a_in.filter_("atrim", start=start, end=end).filter_("asetpts", "PTS-STARTPTS")
+
+            # Soften splice point with micro-fades to eliminate click/pop at cut edge.
+            seg_a = _apply_cut_fades(seg_a, idx, len(keep_segments), end - start, cut_fade_s)
             segments_a.append(seg_a)
 
         # Concatenate all segments using a single combined concat to guarantee A/V sync.
@@ -492,6 +538,7 @@ def _render_as_chunks(
     enc_opts: dict,
     input_kwargs: dict,
     chunk_size: int,
+    cut_fade_s: float = 0.0,
     label: str = "",
 ) -> None:
     """Render by splitting keep_segments into N parallel FFmpeg chunk processes.
@@ -535,7 +582,7 @@ def _render_as_chunks(
             print(f"\n=== {pfx}Chunk {idx + 1}/{n}: {len(chunk_segs)} segments ===", flush=True)
             logger.info("[DETAIL] %sChunk %d of %d start", pfx, idx + 1, n)
             chunk_start = time.time()
-            v, a = _build_filter_chain(input_path, filters, chunk_segs, input_kwargs)
+            v, a = _build_filter_chain(input_path, filters, chunk_segs, input_kwargs, cut_fade_s)
             stream = ffmpeg.output(v, a, chunk_out, **enc_opts)
             logger.info("Chunk %d/%d: rendering %d segs → %s", idx + 1, n, len(chunk_segs), chunk_out)
             run_with_progress(stream, overwrite_output=True)
@@ -549,15 +596,32 @@ def _render_as_chunks(
         for future in futures:
             future.result()
 
-        # Write concat list (absolute forward-slash paths; -safe 0 allows absolute paths)
+        # Write concat list with `duration` directives.
+        # Without `duration` lines the concat demuxer uses each chunk's actual
+        # container last-PTS independently per stream.  If audio and video end at
+        # slightly different PTS within a chunk (sub-frame container rounding), the
+        # demuxer applies different offsets to video vs audio for subsequent chunks,
+        # accumulating A/V drift at every chunk boundary.  Providing the probed
+        # container duration forces both streams to use the same offset.
         fd2, concat_list_path = tempfile.mkstemp(
             suffix=".txt", prefix="concat_list_", dir=str(out_p.parent)
         )
         os.close(fd2)
         with open(concat_list_path, "w", encoding="utf-8") as fh:
-            for cp in chunk_paths:
+            for idx, cp in enumerate(chunk_paths):
                 safe_path = str(Path(cp).absolute()).replace("\\", "/")
                 fh.write(f"file '{safe_path}'\n")
+                try:
+                    chunk_dur = get_video_duration_seconds(cp)
+                    fh.write(f"duration {chunk_dur:.6f}\n")
+                except Exception as exc:
+                    # Non-fatal: concat demuxer falls back to container last-PTS.
+                    logger.warning(
+                        "_render_as_chunks: could not probe chunk %d duration (%s); "
+                        "omitting duration directive — inter-chunk A/V drift possible",
+                        idx,
+                        exc,
+                    )
 
         # Final concat pass: stream copy (no re-encode, fast)
         concat_cmd = [
@@ -595,19 +659,20 @@ def _render_as_chunks(
                 pass
 
 
-# [Modified] by gpt-5.2 | 2026-01-09_03
-def render_project(host_path, guest_path, manifest, out_host, out_guest, config):
+def render_project(input_path, manifest, output_path, config):
     """
-    Constructs and executes the FFmpeg graph.
+    Constructs and executes the FFmpeg graph for a single-stream render.
     Cuts video and audio simultaneously to guarantee sync.
 
     When the segment count exceeds `chunk_size` (from config, default 50), chunk-parallel
     rendering splits the work across N FFmpeg processes then joins results with a concat-demuxer
     pass for significant wall-clock speedup on videos with many cuts.
     """
+    if not output_path:
+        raise ValueError("render_project() requires an output path")
+
     caps = probe_ffmpeg_capabilities()
 
-    # [Modified] by gpt-5.2 | 2026-01-09_03
     # Best-effort CUDA decode is applied ONLY at ffmpeg.input(...) time.
     # NOTE: The rest of the filter graph remains CPU-side.
     use_cuda_decode = bool((config or {}).get("cuda_decode_enabled"))
@@ -616,9 +681,6 @@ def render_project(host_path, guest_path, manifest, out_host, out_guest, config)
         logger.warning(
             "CUDA HWACCEL DECODE ENABLED; FILTER GRAPH IS CPU-SIDE SO DECODE SPEEDUPS MAY BE LIMITED"
         )
-
-    if not out_host and not out_guest:
-        raise ValueError("render_project() requires at least one output (out_host or out_guest)")
 
     # Common Output Settings
     enc_opts = select_enc_opts(config, caps)
@@ -636,6 +698,9 @@ def render_project(host_path, guest_path, manifest, out_host, out_guest, config)
 
     cfg = config or {}
 
+    # Cut-edge fade duration: convert ms → seconds (0 ms = disabled).
+    cut_fade_s = float(cfg.get("cut_fade_ms", 0)) / 1000.0
+
     # Two-phase render dispatch (audio-first + smart video copy).
     # NOTE: probe_ffmpeg_capabilities() is LRU-cached; select_enc_opts() above is
     # redundant when two-phase is active, but cost is negligible.
@@ -643,14 +708,8 @@ def render_project(host_path, guest_path, manifest, out_host, out_guest, config)
         from io_.video_renderer_twophase import render_project_two_phase
 
         logger.info("Two-phase render ACTIVE (audio-first + smart video copy)")
-        out_count = sum(1 for o in (out_host, out_guest) if o)
-        logger.info(
-            "[DETAIL] Encoding strategy: two-phase (audio-first + smart copy) × %d video(s)",
-            out_count,
-        )
-        return render_project_two_phase(
-            host_path, guest_path, manifest, out_host, out_guest, config
-        )
+        logger.info("[DETAIL] Encoding strategy: two-phase (audio-first + smart copy) × 1 video")
+        return render_project_two_phase(input_path, manifest, output_path, config)
 
     # Determine if chunk-parallel rendering should be used.
     # Activates when segment count exceeds chunk_size (guarantees ≥ 2 chunks).
@@ -659,7 +718,6 @@ def render_project(host_path, guest_path, manifest, out_host, out_guest, config)
     n_segs = len(manifest.keep_segments or [])
     use_chunks = chunk_enabled and chunk_size > 0 and n_segs > chunk_size
 
-    out_count = sum(1 for o in (out_host, out_guest) if o)
     if use_chunks:
         n_chunks = (n_segs + chunk_size - 1) // chunk_size
         logger.info(
@@ -667,68 +725,34 @@ def render_project(host_path, guest_path, manifest, out_host, out_guest, config)
             n_segs, chunk_size, n_chunks,
         )
         logger.info(
-            "[DETAIL] Encoding strategy: chunk-parallel | %d segments → %d chunks × %d video(s)",
-            n_segs, n_chunks, out_count,
+            "[DETAIL] Encoding strategy: chunk-parallel | %d segments → %d chunks × 1 video",
+            n_segs, n_chunks,
         )
     else:
         logger.info(
-            "[DETAIL] Encoding strategy: single-pass | %d segments × %d video(s)",
-            n_segs, out_count,
+            "[DETAIL] Encoding strategy: single-pass | %d segments × 1 video",
+            n_segs,
         )
 
-    # Collect render tasks so we can run host+guest in parallel (existing behaviour).
-    # Each task is a completely independent FFmpeg subprocess writing to a different
-    # file, so there is zero sync risk.
-    render_tasks: list[tuple[str, str, str, Callable[[str], None]]] = []
+    def _render(to_path: str) -> None:
+        """Single-stream render closure (chunk or standard pass)."""
+        if use_chunks:
+            _render_as_chunks(
+                input_path, manifest.filters, manifest.keep_segments,
+                to_path, enc_opts, input_kwargs, chunk_size,
+                cut_fade_s=cut_fade_s,
+            )
+        else:
+            v, a = _build_filter_chain(
+                input_path, manifest.filters, manifest.keep_segments, input_kwargs,
+                cut_fade_s,
+            )
+            stream = ffmpeg.output(v, a, to_path, **enc_opts)
+            run_with_progress(stream, overwrite_output=True)
 
-    if out_host:
-        def _render_host(to_path: str) -> None:
-            if use_chunks:
-                _render_as_chunks(
-                    host_path, manifest.host_filters, manifest.keep_segments,
-                    to_path, enc_opts, input_kwargs, chunk_size, label="Host",
-                )
-            else:
-                h_v, h_a = _build_filter_chain(
-                    host_path, manifest.host_filters, manifest.keep_segments, input_kwargs
-                )
-                stream = ffmpeg.output(h_v, h_a, to_path, **enc_opts)
-                run_with_progress(stream, overwrite_output=True)
-        render_tasks.append(("Host", host_path, out_host, _render_host))
-
-    if out_guest:
-        def _render_guest(to_path: str) -> None:
-            if use_chunks:
-                _render_as_chunks(
-                    guest_path, manifest.guest_filters, manifest.keep_segments,
-                    to_path, enc_opts, input_kwargs, chunk_size, label="Guest",
-                )
-            else:
-                g_v, g_a = _build_filter_chain(
-                    guest_path, manifest.guest_filters, manifest.keep_segments, input_kwargs
-                )
-                stream = ffmpeg.output(g_v, g_a, to_path, **enc_opts)
-                run_with_progress(stream, overwrite_output=True)
-        render_tasks.append(("Guest", guest_path, out_guest, _render_guest))
-
-    def _run_render_task(task: tuple[str, str, str, Callable[[str], None]]) -> None:
-        """Execute a single (label, src, dst, render_fn) render task."""
-        label, src, dst, fn = task
-        logger.info("Rendering %s Video...", label)
-        logger.info("[DETAIL] %s video: encoding started", label)
-        task_start = time.time()
-        _render_with_safe_overwrite(src, dst, fn)
-        elapsed = _fmt_elapsed(time.time() - task_start)
-        logger.info("[DETAIL] %s video: encoding complete | Took %s", label, elapsed)
-
-    if len(render_tasks) == 1:
-        # Only one output requested — skip threading overhead.
-        _run_render_task(render_tasks[0])
-    else:
-        # Both outputs requested — run in parallel for ~2× wall-clock speedup.
-        logger.info("Rendering Host + Guest Videos in parallel (ThreadPoolExecutor max_workers=2)...")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(_run_render_task, t) for t in render_tasks]
-        # executor.__exit__ blocks until both threads finish; now surface any exceptions.
-        for future in futures:
-            future.result()
+    logger.info("Rendering video...")
+    logger.info("[DETAIL] Video encoding started")
+    task_start = time.time()
+    _render_with_safe_overwrite(input_path, output_path, _render)
+    elapsed = _fmt_elapsed(time.time() - task_start)
+    logger.info("[DETAIL] Video encoding complete | Took %s", elapsed)

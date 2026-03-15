@@ -3,50 +3,69 @@
 app/
     app.py
     main.py
-    config.py
     AGENTS.md
-    activate.ps1
+    README.md
+    FOLDER_STRUCTURE.md
+    config.py
+    requirements.txt
     .gitignore
     .roomodes
-    0.2.0/
-    tests/
-        test_imports.py
+    analyzers/
+        audio_envelope.py
+        audio_level_analyzer.py
+        normalization_calculator.py
     core/
         __init__.py
         interfaces.py
         pipeline.py
-    analyzers/
-        audio_envelope.py
-        audio_level_analyzer.py
     detectors/
         __init__.py
+        audio_level_detector.py
         base_detector.py
         cross_talk_detector.py
         filler_word_detector.py
-        silence_detector.py
-        spike_detector.py
-    processors/
-        __init__.py
-        base_processor.py
-        audio_fader.py
-        audio_limiter.py
-        audio_normalizer.py
-        segment_remover.py
+        spike_fixer_detector.py
     io_/
         __init__.py
         audio_extractor.py
+        media_probe.py
         video_renderer.py
+        video_renderer_progress.py
+        video_renderer_twophase.py
+    processors/
+        __init__.py
+        audio_normalizer.py
+        base_processor.py
+        segment_remover.py
+        spike_fixer.py
+        word_muter.py
+    tests/
+    ui/
+        __init__.py
+        gui_app.py
+        gui_config_editor.py
+        gui_ffmpeg_formatter.py
+        gui_helpers.py
+        gui_output_rows.py
+        gui_outputs.py
+        gui_pages.py
+        gui_process_helpers.py
+        gui_settings_page.py
+        gui_tooltip.py
+        video_player_picker.py
     utils/
+        audio_helpers.py
+        env_loader.py
         logger.py
+        path_helpers.py
+        pause_removal_log.py
+        processing_alert.py
+        progress_log.py
         time_helpers.py
-    # build/diagnostic artifacts (generated)
-    ._gui_compile_output.txt
-    ._gui_import_output.txt
-    ._gui_run_output.txt
-    ._main_help.txt
-    ._pip_ffmpeg_show.txt
-    ._pip_install.txt
-    ._pyaudioop_install.txt
-    ._pyprocs.txt
-    ._venv_diag.txt
+        video_player_discovery.py
+        video_player_launch.py
 ```
+
+Notes:
+- The current structure reflects the simplified single-stream pipeline: one input video, one extracted audio track, and one rendered output.
+- Removed files such as `io_/media_preflight.py`, `processors/audio_fader.py`, and `detectors/silence_detector.py` are intentionally absent.

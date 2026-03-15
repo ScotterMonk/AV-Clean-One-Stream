@@ -6,8 +6,8 @@ from typing import Any, Dict
 
 class BaseDetector(ABC):
     """
-    Abstract Base Class for all audio detectors.
-    Enforces the structure for Silence, Cross-Talk, and Spike detectors.
+    Abstract Base Class for all audio detectors in the single-stream workflow.
+    Enforces the structure for Silence, Filler, and Spike detectors.
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -18,7 +18,7 @@ class BaseDetector(ABC):
         self.config = config
 
     @abstractmethod
-    def detect(self, host_audio, guest_audio) -> Any:
+    def detect(self, audio) -> Any:
         # Modified by gpt-5.2 | 2026-01-20_01
         """
         Analyze audio and return detector-specific results.
@@ -27,8 +27,7 @@ class BaseDetector(ABC):
         Some detectors may return structured dict-like analysis results.
         
         Args:
-            host_audio: Pydub AudioSegment for the host track
-            guest_audio: Pydub AudioSegment for the guest track
+            audio: Pydub AudioSegment for the single audio track
             
         Returns:
             Detector-specific result.

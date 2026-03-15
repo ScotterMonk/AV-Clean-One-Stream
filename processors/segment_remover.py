@@ -21,7 +21,7 @@ class SegmentRemover(BaseProcessor):
     removals and recompute keep_segments without clobbering these cuts.
     """
 
-    def process(self, manifest: EditManifest, host_audio, guest_audio, detection_results) -> EditManifest:
+    def process(self, manifest: EditManifest, audio, detection_results) -> EditManifest:
         # 1. Get the list of "bad" segments (pauses / cross-talk) to remove.
         pauses = detection_results.get('cross_talk_detector', [])
 
@@ -46,13 +46,12 @@ class SegmentRemover(BaseProcessor):
         for start_s, end_s in sorted_pauses:
             manifest.add_removal(start_s, end_s)
 
-        total_duration = host_audio.duration_seconds
+        total_duration = audio.duration_seconds
         manifest.compute_keep_segments(total_duration)
 
         total_removed = sum(end - start for start, end in sorted_pauses)
         logger.info(
-            f"[PROCESSOR COMPLETE] Cut {len(sorted_pauses)} pauses from both videos (sync-safe)"
-            f" - Total time cut: {format_time_cut(total_removed)}"
+            f"[PROCESSOR COMPLETE] Cut {len(sorted_pauses)} pauses — Total time cut: {format_time_cut(total_removed)}"
         )
 
         return manifest

@@ -53,18 +53,14 @@ class EditManifest:
     word_mute_applied: bool = False
 
     # ── Audio filters ──────────────────────────────────────────────────────
-    # FFmpeg filters to apply to the Host Track
-    host_filters: List[AudioFilter] = field(default_factory=list)
-
-    # FFmpeg filters to apply to the Guest Track
-    guest_filters: List[AudioFilter] = field(default_factory=list)
+    # NOTE: host_filters / guest_filters removed — single-stream workflow.
+    # FFmpeg audio filters (single track — Zoom single-stream workflow)
+    filters: List[AudioFilter] = field(default_factory=list)
 
     # ── Helpers ────────────────────────────────────────────────────────────
-    def add_host_filter(self, name, **kwargs):
-        self.host_filters.append(AudioFilter(name, kwargs))
-
-    def add_guest_filter(self, name, **kwargs):
-        self.guest_filters.append(AudioFilter(name, kwargs))
+    def add_filter(self, name, **kwargs):
+        """Append an FFmpeg audio filter for the single output track."""
+        self.filters.append(AudioFilter(name, kwargs))
 
     def add_removal(self, start: float, end: float) -> None:
         """Append a time range (seconds) to the shared removal accumulator."""

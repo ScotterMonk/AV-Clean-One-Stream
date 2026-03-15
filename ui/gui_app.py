@@ -311,26 +311,25 @@ class AVCleanerGUI(tk.Tk):
         self.destroy()
 
     def _run_clicked(self) -> None:
-        # Created by coder-sr | 2026-03-14 — moved from MainPage._run_clicked
-        # "PROCESS" requires both files because it performs sync-preserving edits
-        # that must be applied to host + guest together.
-        host_row = self._rows.get("host")
-        guest_row = self._rows.get("guest")
-        host = host_row.path if host_row else None
-        guest = guest_row.path if guest_row else None
-        if not host or not guest:
-            messagebox.showwarning("Missing files", "Select both HOST and GUEST files first.")
+        # Modified by gpt-5.4 | 2026-03-15
+        row = self._rows.get("input")
+        input_path = row.path if row else None
+        if not input_path:
+            messagebox.showwarning("Missing file", "Select a video file first.")
             return
-        self.run_processing(host, guest)
+        self.run_processing(input_path)
 
     def clear_logs(self) -> None:
         self._log_queue.put("__CLEAR__")
 
     # Modified by gpt-5.4 | 2026-03-15
+    # Modified by x-ai/grok-4.20-beta | 2026-03-15
     def _gui_line_sanitize(self, text: str) -> str:
-        """Remove redundant logging level text from GUI-only display lines."""
+        """Remove redundant logging level text and [DETAIL] markers from GUI-only display lines."""
 
         sanitized = text.replace(" - INFO - ", " ")
+        sanitized = sanitized.replace("[DETAIL] ", "")
+        sanitized = sanitized.replace("[DETAIL]", "")
         sanitized = sanitized.replace("â€”", " ")
         sanitized = sanitized.replace("—", " ")
         return sanitized
@@ -539,9 +538,8 @@ class AVCleanerGUI(tk.Tk):
         self.append_log("[GUI] Processing stopped by user.\n")
         self.set_status("Stopped")
 
-    # Modified by gpt-5.2 | 2026-01-13_01
-    def run_processing(self, host_path: str, guest_path: str) -> None:
-        # Modified by gpt-5.4 | 2026-03-07
+    # Modified by gpt-5.4 | 2026-03-15
+    def run_processing(self, input_path: str) -> None:
         if self._proc and self._proc.poll() is None:
             messagebox.showwarning("Already running", "A job is already running.")
             return
@@ -565,17 +563,14 @@ class AVCleanerGUI(tk.Tk):
             sys.executable,
             "main.py",
             "process",
-            "--host",
-            host_path,
-            "--guest",
-            guest_path,
+            "--input",
+            input_path,
         ]
         self.append_log("$ " + " ".join(cmd) + "\n")
 
-        # Modified by gpt-5.4 | 2026-03-07
+        # Modified by gpt-5.4 | 2026-03-15
         def _worker() -> None:
-            _result_host: str | None = None
-            _result_guest: str | None = None
+            _result_output: str | None = None
             # Flag: play the completion chime only when processing actually finished
             # (not when the user manually stopped it). Set exactly once per run so
             # the alert never fires more than once regardless of code path taken.
@@ -609,10 +604,13 @@ class AVCleanerGUI(tk.Tk):
                             # MainPage.append_progress_view().
                             self.append_progress(line)
 
-                    result_host, result_guest = result_line_paths_parse(line)
-                    if result_host and result_guest:
-                        _result_host = result_host
-                        _result_guest = result_guest
+                    parsed_result = result_line_paths_parse(line)
+                    if isinstance(parsed_result, tuple):
+                        result_output = next((path for path in parsed_result if path), None)
+                    else:
+                        result_output = parsed_result
+                    if result_output:
+                        _result_output = result_output
 
                 code = self._proc.wait()
 
@@ -621,13 +619,10 @@ class AVCleanerGUI(tk.Tk):
                     pass
                 elif code == 0:
                     # Use paths emitted by the pipeline, fall back to computed paths.
-                    host_processed = _result_host or make_processed_output_path(host_path)
-                    guest_processed = _result_guest or make_processed_output_path(guest_path)
+                    output_processed = _result_output or make_processed_output_path(input_path)
 
-                    if os.path.exists(host_processed):
-                        self.after(0, self._set_modded_row_for_path, "host", host_processed)
-                    if os.path.exists(guest_processed):
-                        self.after(0, self._set_modded_row_for_path, "guest", guest_processed)
+                    if os.path.exists(output_processed):
+                        self.after(0, self._set_modded_row_for_path, "output", output_processed)
 
                     self.set_status("Done")
                     _play_alert = True
@@ -780,8 +775,8 @@ class AVCleanerGUI(tk.Tk):
             messagebox.showerror("Play failed", str(exc))
 
     def _select_file(self, role: str) -> None:
-        # Modified by gpt-5.4 | 2026-03-07
-        title = "Select Host Video" if role == "host" else "Select Guest Video"
+        # Modified by gpt-5.4 | 2026-03-15
+        title = "Select Video"
         video_path = filedialog.askopenfilename(
             title=title,
             filetypes=[
@@ -835,9 +830,10 @@ class AVCleanerGUI(tk.Tk):
             if row.play_btn is not None:
                 row.play_btn.grid_remove()
 
-    def save_fixed_outputs(self, host: str, guest: str) -> None:
+    def save_fixed_outputs(self, output_path: str) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         try:
-            saved = gui_save_fixed_outputs(host, guest, project_dir=self._project_dir)
+            saved = gui_save_fixed_outputs(output_path, project_dir=self._project_dir)
             if not saved:
                 return
         except Exception as e:

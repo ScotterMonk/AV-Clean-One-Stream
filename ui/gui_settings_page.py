@@ -65,6 +65,9 @@ class SettingsPage(tk.Frame):
             "ui_button_caption_color": tk.StringVar(),
             "ui_accent_font_color": tk.StringVar(),
             "ui_accent_line_color": tk.StringVar(),
+            # Console / Filler Words Found pane width split (column weights)
+            "pane_console_width_pct": tk.StringVar(),
+            "pane_filler_words_found_pct": tk.StringVar(),
         }
 
         def add_row(label: str, key: str) -> None:
@@ -128,6 +131,8 @@ class SettingsPage(tk.Frame):
         add_row("Button caption color", "ui_button_caption_color")
         add_row("Accent font color", "ui_accent_font_color")
         add_row("Accent line color", "ui_accent_line_color")
+        add_row("Console pane width %", "pane_console_width_pct")
+        add_row("Filler Words pane width %", "pane_filler_words_found_pct")
 
         note = tk.Label(
             parent,
@@ -165,15 +170,14 @@ class SettingsPage(tk.Frame):
         player_name = Path(selected_path).name
         self._app.set_status(f"Default video player selected: {player_name}. Click SAVE TO config.py.")
 
-    # Modified by gpt-5.4 | 2026-03-07
+    # Modified by gpt-5.4 | 2026-03-15
     def _build_pipeline_form(self, parent: tk.Frame) -> None:
         app = self._app
         self._pipe_vars: dict[str, tk.BooleanVar] = {}
 
         self._word_vars: dict[str, tk.StringVar] = {
             "words_to_remove": tk.StringVar(),
-            "confidence_required_host": tk.StringVar(value="1.00"),
-            "confidence_required_guest": tk.StringVar(value="0.90"),
+            "confidence_required": tk.StringVar(value="0.95"),
             "confidence_bonus_per_word": tk.StringVar(value="0.05"),
             "filler_mute_inset_ms": tk.StringVar(value="30"),
             "filler_mute_gap_threshold_ms": tk.StringVar(value="60"),
@@ -189,11 +193,29 @@ class SettingsPage(tk.Frame):
             "normalization_standard_target": tk.StringVar(value="-16.0"),
             "normalization_max_gain_db": tk.StringVar(value="15.0"),
         }
-        self._norm_mode = tk.StringVar(value="MATCH_HOST")
-
         # Encoder vars
         self._enc_mode = tk.StringVar(value="cpu")
         self._enc_quality = tk.StringVar(value="18")
+
+        # Extended encoder and rendering vars (all QUALITY_PRESETS fields not covered above)
+        self._enc_str_vars: dict[str, tk.StringVar] = {
+            "video_codec": tk.StringVar(value="libx264"),
+            "video_preset": tk.StringVar(value="fast"),
+            "audio_codec": tk.StringVar(value="aac"),
+            "audio_bitrate": tk.StringVar(value="320k"),
+            "nvenc_codec": tk.StringVar(value="h264_nvenc"),
+            "nvenc_preset": tk.StringVar(value="p4"),
+            "nvenc_rc": tk.StringVar(value="vbr"),
+            "chunk_size": tk.StringVar(value="50"),
+            "keyframe_snap_tolerance_s": tk.StringVar(value="0.1"),
+            "cut_fade_ms": tk.StringVar(value="16"),
+        }
+        self._enc_bool_vars: dict[str, tk.BooleanVar] = {
+            "cuda_decode_enabled": tk.BooleanVar(value=True),
+            "cuda_require_support": tk.BooleanVar(value=True),
+            "chunk_parallel_enabled": tk.BooleanVar(value=True),
+            "two_phase_render_enabled": tk.BooleanVar(value=False),
+        }
 
         # Scrollable container for pipeline pane
         outer = tk.Frame(parent, bg=app._palette["panel"])
@@ -241,7 +263,7 @@ class SettingsPage(tk.Frame):
         self._pipe_canvas.bind("<Enter>", _bind_mousewheel)
         self._pipe_canvas.bind("<Leave>", _unbind_mousewheel)
 
-    # Modified by gpt-5.4 | 2026-03-07
+    # Modified by gpt-5.4 | 2026-03-15
     def _render_pipeline_toggles(self, pipe_cfg: dict, qual_presets: dict, words_cfg: dict) -> None:
         app = self._app
         for c in self._pipe_container.winfo_children():
@@ -262,8 +284,9 @@ class SettingsPage(tk.Frame):
         norm = preset.get("normalization")
         if not isinstance(norm, dict):
             norm = {}
-        self._norm_mode.set(str(norm.get("mode", "MATCH_HOST")))
-        self._qual_vars["normalization_standard_target"].set(str(norm.get("standard_target", -16.0)))
+        self._qual_vars["normalization_standard_target"].set(
+            str(norm.get("target_lufs", norm.get("standard_target", -16.0)))
+        )
         self._qual_vars["normalization_max_gain_db"].set(str(norm.get("max_gain_db", 15.0)))
 
         cuda_enabled = bool(preset.get("cuda_encode_enabled", False))
@@ -273,12 +296,30 @@ class SettingsPage(tk.Frame):
         start_q = preset.get("crf", 23)
         self._enc_quality.set(str(start_q))
 
+        # Load extended encoder / rendering settings
+        self._enc_str_vars["video_codec"].set(str(preset.get("video_codec", "libx264")))
+        self._enc_str_vars["video_preset"].set(str(preset.get("video_preset", "fast")))
+        self._enc_str_vars["audio_codec"].set(str(preset.get("audio_codec", "aac")))
+        self._enc_str_vars["audio_bitrate"].set(str(preset.get("audio_bitrate", "320k")))
+        nvenc_blk = preset.get("nvenc", {})
+        if not isinstance(nvenc_blk, dict):
+            nvenc_blk = {}
+        self._enc_str_vars["nvenc_codec"].set(str(nvenc_blk.get("codec", "h264_nvenc")))
+        self._enc_str_vars["nvenc_preset"].set(str(nvenc_blk.get("preset", "p4")))
+        self._enc_str_vars["nvenc_rc"].set(str(nvenc_blk.get("rc", "vbr")))
+        self._enc_str_vars["chunk_size"].set(str(preset.get("chunk_size", 50)))
+        self._enc_str_vars["keyframe_snap_tolerance_s"].set(str(preset.get("keyframe_snap_tolerance_s", 0.1)))
+        self._enc_str_vars["cut_fade_ms"].set(str(preset.get("cut_fade_ms", 16)))
+        self._enc_bool_vars["cuda_decode_enabled"].set(bool(preset.get("cuda_decode_enabled", True)))
+        self._enc_bool_vars["cuda_require_support"].set(bool(preset.get("cuda_require_support", True)))
+        self._enc_bool_vars["chunk_parallel_enabled"].set(bool(preset.get("chunk_parallel_enabled", True)))
+        self._enc_bool_vars["two_phase_render_enabled"].set(bool(preset.get("two_phase_render_enabled", False)))
+
         words_to_remove = words_cfg.get("words_to_remove", [])
         if not isinstance(words_to_remove, list):
             words_to_remove = []
         self._word_vars["words_to_remove"].set(", ".join(str(word).strip() for word in words_to_remove if str(word).strip()))
-        self._word_vars["confidence_required_host"].set(str(words_cfg.get("confidence_required_host", 1.0)))
-        self._word_vars["confidence_required_guest"].set(str(words_cfg.get("confidence_required_guest", 0.9)))
+        self._word_vars["confidence_required"].set(str(words_cfg.get("confidence_required", 0.95)))
         self._word_vars["confidence_bonus_per_word"].set(str(words_cfg.get("confidence_bonus_per_word", 0.05)))
         self._word_vars["filler_mute_inset_ms"].set(str(words_cfg.get("filler_mute_inset_ms", 30)))
         self._word_vars["filler_mute_gap_threshold_ms"].set(str(words_cfg.get("filler_mute_gap_threshold_ms", 60)))
@@ -351,34 +392,11 @@ class SettingsPage(tk.Frame):
 
         tk.Label(
             qual_sec,
-            text="Normalization mode",
+            text="Normalization: Standard LUFS (fixed)",
             font=app._mono(weight="bold"),
             bg=app._palette["panel"],
             fg=app._palette["text"],
-        ).pack(anchor="w", pady=(6, 0))
-
-        row_norm = tk.Frame(qual_sec, bg=app._palette["panel"])
-        row_norm.pack(fill="x", pady=(2, 8))
-
-        def mk_norm_radio(val: str, label: str) -> None:
-            r = tk.Radiobutton(
-                row_norm,
-                text=label,
-                variable=self._norm_mode,
-                value=val,
-                font=app._mono(),
-                bg=app._palette["panel"],
-                fg=app._palette["text"],
-                selectcolor=app._palette["panel2"],
-                activebackground=app._palette["panel"],
-                activeforeground=app._palette["text"],
-                highlightthickness=0,
-                bd=0,
-            )
-            r.pack(side="left", padx=(0, 10))
-
-        mk_norm_radio("MATCH_HOST", "Match host")
-        mk_norm_radio("STANDARD_LUFS", "Standard LUFS")
+        ).pack(anchor="w", pady=(6, 8))
 
         mk_kv_row(qual_sec, "Standard target (LUFS)", self._qual_vars["normalization_standard_target"], width=10)
         mk_kv_row(qual_sec, "Max gain (dB)", self._qual_vars["normalization_max_gain_db"], width=10)
@@ -390,8 +408,7 @@ class SettingsPage(tk.Frame):
 
         words_sec = mk_section("FILLER WORD DETECTION")
         mk_kv_row(words_sec, "Words to remove (comma-separated)", self._word_vars["words_to_remove"], width=28)
-        mk_kv_row(words_sec, "Host confidence required", self._word_vars["confidence_required_host"], width=10)
-        mk_kv_row(words_sec, "Guest confidence required", self._word_vars["confidence_required_guest"], width=10)
+        mk_kv_row(words_sec, "Confidence required", self._word_vars["confidence_required"], width=10)
         mk_kv_row(words_sec, "Confidence bonus per word", self._word_vars["confidence_bonus_per_word"], width=10)
         mk_kv_row(words_sec, "Mute inset (ms)", self._word_vars["filler_mute_inset_ms"], width=10)
         mk_kv_row(
@@ -473,6 +490,46 @@ class SettingsPage(tk.Frame):
             fg=app._palette["muted"],
         ).pack(side="left", padx=10)
 
+        # Helper: checkbox row bound to an existing BooleanVar
+        def mk_chk_row(sec: tk.Frame, label: str, var: tk.BooleanVar) -> None:
+            row = tk.Frame(sec, bg=app._palette["panel"])
+            row.pack(fill="x", pady=4)
+            tk.Checkbutton(
+                row,
+                text=label,
+                variable=var,
+                font=app._mono(),
+                bg=app._palette["panel"],
+                fg=app._palette["text"],
+                activebackground=app._palette["panel"],
+                activeforeground=app._palette["text"],
+                selectcolor=app._palette["panel2"],
+                highlightthickness=0,
+                bd=0,
+            ).pack(side="left")
+
+        # CPU encoder settings
+        mk_kv_row(enc_sec, "CPU codec", self._enc_str_vars["video_codec"], width=14)
+        mk_kv_row(enc_sec, "CPU preset", self._enc_str_vars["video_preset"], width=14)
+
+        # NVENC (GPU) settings
+        mk_kv_row(enc_sec, "NVENC codec", self._enc_str_vars["nvenc_codec"], width=14)
+        mk_kv_row(enc_sec, "NVENC preset", self._enc_str_vars["nvenc_preset"], width=14)
+        mk_kv_row(enc_sec, "NVENC rate-control", self._enc_str_vars["nvenc_rc"], width=14)
+        mk_chk_row(enc_sec, "CUDA decode enabled", self._enc_bool_vars["cuda_decode_enabled"])
+        mk_chk_row(enc_sec, "Require CUDA support", self._enc_bool_vars["cuda_require_support"])
+
+        # Audio
+        mk_kv_row(enc_sec, "Audio codec", self._enc_str_vars["audio_codec"], width=14)
+        mk_kv_row(enc_sec, "Audio bitrate", self._enc_str_vars["audio_bitrate"], width=14)
+
+        # Rendering / chunking
+        mk_chk_row(enc_sec, "Chunk parallel enabled", self._enc_bool_vars["chunk_parallel_enabled"])
+        mk_kv_row(enc_sec, "Chunk size (frames)", self._enc_str_vars["chunk_size"], width=10)
+        mk_chk_row(enc_sec, "Two-phase render", self._enc_bool_vars["two_phase_render_enabled"])
+        mk_kv_row(enc_sec, "Keyframe snap tolerance (s)", self._enc_str_vars["keyframe_snap_tolerance_s"], width=10)
+        mk_kv_row(enc_sec, "Cut fade (ms)", self._enc_str_vars["cut_fade_ms"], width=10)
+
         note = tk.Label(
             self._pipe_container,
             text=(
@@ -486,7 +543,7 @@ class SettingsPage(tk.Frame):
         )
         note.pack(anchor="w", pady=(14, 0))
 
-    # Modified by gpt-5.4 | 2026-03-07
+    # Modified by gpt-5.4 | 2026-03-15
     def _reload(self) -> None:
         try:
             gui_dict, pipe_cfg, qual_presets, words_cfg = ConfigEditor.load_gui_pipeline_quality_words(self._config_path)
@@ -499,8 +556,7 @@ class SettingsPage(tk.Frame):
         self._render_pipeline_toggles(pipe_cfg, qual_presets, words_cfg)
         self._app.set_status("Settings loaded")
 
-    # Modified by gpt-5.4 | 2026-03-07
-    # Modified by gpt-5.4 | 2026-03-07
+    # Modified by gpt-5.4 | 2026-03-15
     def _save(self) -> None:
         def to_int(key: str) -> int:
             raw = self._vars[key].get().strip()
@@ -550,6 +606,9 @@ class SettingsPage(tk.Frame):
                 "ui_button_caption_color": to_color("ui_button_caption_color"),
                 "ui_accent_font_color": to_color("ui_accent_font_color"),
                 "ui_accent_line_color": to_color("ui_accent_line_color"),
+                # Pane split weights (integers; don't need to sum to 100)
+                "pane_console_width_pct": to_int("pane_console_width_pct"),
+                "pane_filler_words_found_pct": to_int("pane_filler_words_found_pct"),
             }
 
             _, pipe_cfg, qual_presets, words_cfg = ConfigEditor.load_gui_pipeline_quality_words(self._config_path)
@@ -599,10 +658,7 @@ class SettingsPage(tk.Frame):
             preset["spike_threshold_db"] = to_int_s(self._qual_vars["spike_threshold_db"], "Spike threshold (dB)")
 
             preset["normalization"] = {
-                "mode": self._norm_mode.get().strip() or "MATCH_HOST",
-                "standard_target": to_float_s(
-                    self._qual_vars["normalization_standard_target"], "Standard target (LUFS)"
-                ),
+                "target_lufs": to_float_s(self._qual_vars["normalization_standard_target"], "Standard target (LUFS)"),
                 "max_gain_db": to_float_s(self._qual_vars["normalization_max_gain_db"], "Max gain (dB)"),
             }
 
@@ -618,16 +674,38 @@ class SettingsPage(tk.Frame):
 
             preset["nvenc"]["cq"] = qual_val
 
+            # Extended encoder / rendering fields
+            preset["cuda_decode_enabled"] = self._enc_bool_vars["cuda_decode_enabled"].get()
+            preset["cuda_require_support"] = self._enc_bool_vars["cuda_require_support"].get()
+            preset["video_codec"] = self._enc_str_vars["video_codec"].get().strip()
+            preset["video_preset"] = self._enc_str_vars["video_preset"].get().strip()
+            preset["audio_codec"] = self._enc_str_vars["audio_codec"].get().strip()
+            preset["audio_bitrate"] = self._enc_str_vars["audio_bitrate"].get().strip()
+            preset["nvenc"]["codec"] = self._enc_str_vars["nvenc_codec"].get().strip()
+            preset["nvenc"]["preset"] = self._enc_str_vars["nvenc_preset"].get().strip()
+            preset["nvenc"]["rc"] = self._enc_str_vars["nvenc_rc"].get().strip()
+            preset["chunk_parallel_enabled"] = self._enc_bool_vars["chunk_parallel_enabled"].get()
+            try:
+                preset["chunk_size"] = int(self._enc_str_vars["chunk_size"].get().strip())
+            except ValueError:
+                raise ValueError("Chunk size must be an integer")
+            preset["two_phase_render_enabled"] = self._enc_bool_vars["two_phase_render_enabled"].get()
+            try:
+                preset["keyframe_snap_tolerance_s"] = float(
+                    self._enc_str_vars["keyframe_snap_tolerance_s"].get().strip()
+                )
+            except ValueError:
+                raise ValueError("Keyframe snap tolerance must be a number")
+            try:
+                preset["cut_fade_ms"] = int(self._enc_str_vars["cut_fade_ms"].get().strip())
+            except ValueError:
+                raise ValueError("Cut fade (ms) must be an integer")
+
             words_raw = self._word_vars["words_to_remove"].get().strip()
             words_cfg["words_to_remove"] = [
                 word.strip() for word in words_raw.split(",") if word.strip()
             ]
-            words_cfg["confidence_required_host"] = to_float_word(
-                "confidence_required_host", "Host confidence required"
-            )
-            words_cfg["confidence_required_guest"] = to_float_word(
-                "confidence_required_guest", "Guest confidence required"
-            )
+            words_cfg["confidence_required"] = to_float_word("confidence_required", "Confidence required")
             words_cfg["confidence_bonus_per_word"] = to_float_word(
                 "confidence_bonus_per_word", "Confidence bonus per word"
             )

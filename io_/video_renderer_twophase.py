@@ -606,14 +606,19 @@ def quantize_segments_to_frames(
 
 
 def render_project_two_phase(
-    host_path: str,
-    guest_path: str,
+    input_path: str,
     manifest,
-    out_host: str | None,
-    out_guest: str | None,
-    config: dict | None,
+    output_path: str,
+    config: dict | None = None,
 ) -> None:
-    """Orchestrate two-phase (audio-first) rendering for host and guest tracks."""
+    """Orchestrate two-phase (audio-first) rendering for a single input track.
+
+    Args:
+        input_path:  Path to the source video file.
+        manifest:    EditManifest carrying keep_segments and audio filters.
+        output_path: Destination path for the rendered output file.
+        config:      Optional pipeline config dict (codec prefs, CUDA flags, etc.).
+    """
     from io_.video_renderer import probe_ffmpeg_capabilities, select_enc_opts
     caps = probe_ffmpeg_capabilities()
     enc_opts = select_enc_opts(config, caps)
@@ -623,7 +628,7 @@ def render_project_two_phase(
     audio_opts = {k: enc_opts[k] for k in ("acodec", "audio_bitrate") if k in enc_opts}
     snap_tol = float(cfg.get("keyframe_snap_tolerance_s", 0.1))
 
-    def _render_track(src_path: str, filters: list, to_path: str, label: str = "") -> None:
+    def _render_track(src_path: str, filters: list, to_path: str) -> None:
         # Normalize empty keep_segments to full-duration span.
         segs = manifest.keep_segments or [(0.0, get_video_duration_seconds(src_path))]
 
@@ -635,8 +640,8 @@ def render_project_two_phase(
         if vid_fps:
             segs = quantize_segments_to_frames(segs, vid_fps)
             logger.info(
-                "[DETAIL] %sframe quantization: %d segments snapped to %.4f fps grid",
-                f"{label} " if label else "", len(segs), vid_fps,
+                "[DETAIL] frame quantization: %d segments snapped to %.4f fps grid",
+                len(segs), vid_fps,
             )
         else:
             logger.warning(
@@ -650,7 +655,8 @@ def render_project_two_phase(
             # Use quantized `segs` (not raw manifest.keep_segments) so the
             # single-pass filter graph uses frame-aligned boundaries.
             logger.info("two-phase: non-h264 codec=%r; single-pass fallback", source_codec)
-            v, a = _build_filter_chain(src_path, filters, segs, input_kwargs)
+            cut_fade_s = float(cfg.get("cut_fade_ms", 0)) / 1000.0
+            v, a = _build_filter_chain(src_path, filters, segs, input_kwargs, cut_fade_s)
             run_with_progress(ffmpeg.output(v, a, to_path, **enc_opts), overwrite_output=True)
             return
         out_dir = Path(to_path).parent
@@ -658,25 +664,24 @@ def render_project_two_phase(
         os.close(fd)
         fd, tmp_video = tempfile.mkstemp(suffix=".mp4", dir=str(out_dir))
         os.close(fd)
-        pfx = f"{label} " if label else ""
         try:
             t0 = time.monotonic()
-            logger.info("[DETAIL] %saudio render: started (%d segments)", pfx, len(segs))
+            logger.info("[DETAIL] audio render: started (%d segments)", len(segs))
             render_audio_phase(src_path, filters, segs, tmp_audio, audio_opts)
-            logger.info("[DETAIL] %saudio render: complete | Took %s", pfx, _fmt_elapsed(time.monotonic() - t0))
+            logger.info("[DETAIL] audio render: complete | Took %s", _fmt_elapsed(time.monotonic() - t0))
 
             t0 = time.monotonic()
-            logger.info("[DETAIL] %skeyframe scan: started", pfx)
+            logger.info("[DETAIL] keyframe scan: started")
             keyframes = probe_video_keyframes(src_path)
-            logger.info("[DETAIL] %skeyframe scan: complete | %d keyframes | Took %s", pfx, len(keyframes), _fmt_elapsed(time.monotonic() - t0))
+            logger.info("[DETAIL] keyframe scan: complete | %d keyframes | Took %s", len(keyframes), _fmt_elapsed(time.monotonic() - t0))
 
             t0 = time.monotonic()
-            logger.info("[DETAIL] %svideo copy: started (%d segments)", pfx, len(segs))
+            logger.info("[DETAIL] video copy: started (%d segments)", len(segs))
             render_video_smart_copy(src_path, segs, keyframes, tmp_video, enc_opts, snap_tol)
-            logger.info("[DETAIL] %svideo copy: complete | Took %s", pfx, _fmt_elapsed(time.monotonic() - t0))
+            logger.info("[DETAIL] video copy: complete | Took %s", _fmt_elapsed(time.monotonic() - t0))
 
             t0 = time.monotonic()
-            logger.info("[DETAIL] %smux: started", pfx)
+            logger.info("[DETAIL] mux: started")
             # -shortest: stop output when the shorter track ends, preventing
             # the longer track from extending unsynchronised.  Guards against
             # any residual cumulative duration mismatch between the separately
@@ -685,7 +690,7 @@ def render_project_two_phase(
                    "-c", "copy", "-map", "0:v", "-map", "1:a",
                    "-shortest", to_path]
             proc = subprocess.run(cmd, capture_output=True, text=True)
-            logger.info("[DETAIL] %smux: complete | Took %s", pfx, _fmt_elapsed(time.monotonic() - t0))
+            logger.info("[DETAIL] mux: complete | Took %s", _fmt_elapsed(time.monotonic() - t0))
             if proc.returncode != 0:
                 raise RuntimeError(f"Mux failed: {proc.stderr}")
         finally:
@@ -695,26 +700,10 @@ def render_project_two_phase(
                 except OSError:
                     pass
 
-    render_tasks: list = []
-    if out_host:
-        def _host_fn(to_path: str, _s=host_path, _f=manifest.host_filters) -> None:
-            _render_track(_s, _f, to_path, label="Host")
-        render_tasks.append(("Host", host_path, out_host, _host_fn))
-    if out_guest:
-        def _guest_fn(to_path: str, _s=guest_path, _f=manifest.guest_filters) -> None:
-            _render_track(_s, _f, to_path, label="Guest")
-        render_tasks.append(("Guest", guest_path, out_guest, _guest_fn))
-
-    def _run(task: tuple) -> None:
-        label, src, dst, fn = task
-        logger.info("Rendering %s Video (two-phase)...", label)
-        _render_with_safe_overwrite(src, dst, fn)
-
-    if len(render_tasks) == 1:
-        _run(render_tasks[0])
-    else:
-        logger.info("Rendering Host + Guest in parallel (two-phase, max_workers=2)...")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(_run, t) for t in render_tasks]
-        for future in futures:
-            future.result()
+    # Single-stream render: one input → one output, no host/guest branching.
+    logger.info("Rendering video (two-phase)...")
+    _render_with_safe_overwrite(
+        input_path,
+        output_path,
+        lambda to_path: _render_track(input_path, manifest.filters, to_path),
+    )

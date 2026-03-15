@@ -32,56 +32,41 @@ def _log_filler_word_line(detail: dict) -> str:
 
 
 def _log_filler_word_details(word_mute_details: list) -> None:
-    """Log per-word detail lines for each track using the shared formatter.
+    """Log per-word detail lines as a single combined block.
 
-    Groups details by track (Host / Guest) and emits one [DETAIL] header
-    followed by one line per word.  Identical format for both tracks.
+    Emits one [DETAIL] header followed by one line per word across all tracks.
     """
     if not word_mute_details:
-        logger.info("[DETAIL] No filler words detected in either track.")
+        logger.info("[DETAIL] No filler words detected.")
         return
 
-    for label in ("Host", "Guest"):
-        track_details = [
-            d for d in word_mute_details
-            if str(d.get("track") or "").lower() == label.lower()
-        ]
-        if not track_details:
-            continue
-
-        muted = sum(1 for d in track_details if d.get("action") == "mute")
-        skipped = sum(1 for d in track_details if d.get("action") == "skipped")
-        logger.info(
-            "[DETAIL] %s filler words — %d found, %d muted, %d skipped:",
-            label, len(track_details), muted, skipped,
-        )
-        for detail in track_details:
-            logger.info("[DETAIL]   %s", _log_filler_word_line(detail))
+    muted = sum(1 for d in word_mute_details if d.get("action") == "mute")
+    skipped = sum(1 for d in word_mute_details if d.get("action") == "skipped")
+    logger.info(
+        "[DETAIL] Filler words — %d found, %d muted, %d skipped:",
+        len(word_mute_details), muted, skipped,
+    )
+    for detail in word_mute_details:
+        logger.info("[DETAIL]   %s", _log_filler_word_line(detail))
 
 
 def _log_filler_word_summary(manifest) -> None:
-    """Log a per-track end-of-run filler word summary (after ALL processing completes).
+    """Log a single end-of-run filler word summary (after ALL processing completes).
 
-    Emits one [RUN SUMMARY] line each for Host and Guest.
-    Only emits when WordMuter ran and at least one track had words.
+    Emits one [RUN SUMMARY] line combining all details.
+    Only emits when WordMuter ran and at least one word was found.
     """
     if not getattr(manifest, "word_mute_applied", False):
         return  # WordMuter didn't run — nothing to summarise
 
     details = getattr(manifest, "word_mute_details", []) or []
-
-    for label in ("Host", "Guest"):
-        track_details = [
-            d for d in details
-            if str(d.get("track") or "").lower() == label.lower()
-        ]
-        found = len(track_details)
-        muted = sum(1 for d in track_details if d.get("action") == "mute")
-        skipped = sum(1 for d in track_details if d.get("action") == "skipped")
-        logger.info(
-            "[RUN SUMMARY] %s filler words — found: %d, muted: %d, skipped: %d",
-            label, found, muted, skipped,
-        )
+    found = len(details)
+    muted = sum(1 for d in details if d.get("action") == "mute")
+    skipped = sum(1 for d in details if d.get("action") == "skipped")
+    logger.info(
+        "[RUN SUMMARY] Filler words — found: %d, muted: %d, skipped: %d",
+        found, muted, skipped,
+    )
 
 
 class ProcessingPipeline:
@@ -98,28 +83,27 @@ class ProcessingPipeline:
         self.processors.append(processor)
         return self
 
-    # Modified by gpt-5.4 | 2026-03-08
-    def execute(
-        self,
-        host_video_path: str,
-        guest_video_path: str,
-        *,
-        render_host: bool = True,
-        render_guest: bool = True,
-    ):
+    def execute(self, video_path: str, *, render: bool = True) -> "str | None":
+        """Run the full detection → manifest → render pipeline for a single input.
+
+        Args:
+            video_path: Path to the input video file.
+            render:     When False the manifest is built but no output file is written.
+
+        Returns:
+            Path to the rendered output file, or None when render=False.
+        """
         logger.info("Phase 1: Extraction & Analysis")
         phase1_start = time.time()
-         
+
         # 1. Extract Audio to RAM/Temp (Fast pydub loading)
-        logger.info("[DETAIL] Extracting audio (host + guest)...")
-        host_audio = audio_extractor.extract_audio(host_video_path)
-        guest_audio = audio_extractor.extract_audio(guest_video_path)
-         
+        logger.info("[DETAIL] Extracting audio...")
+        audio = audio_extractor.extract_audio(video_path)
+
         # 2. Run Detectors (Generate Detection Results)
         detection_results = {
-            # Detectors can depend on input paths (ex: SpikeFixerDetector FFmpeg analysis).
-            "host_video_path": host_video_path,
-            "guest_video_path": guest_video_path,
+            # Detectors can depend on the input path (ex: SpikeFixerDetector FFmpeg pass).
+            "video_path": video_path,
         }
 
         detector_names = [d.get_name() for d in self.detectors]
@@ -152,10 +136,10 @@ class ProcessingPipeline:
 
             if supports_detection_results:
                 logger.debug("[DETECTOR] %s will receive accumulated detection_results", detector_name)
-                result = detector.detect(host_audio, guest_audio, detection_results)
+                result = detector.detect(audio, detection_results)
             else:
                 logger.debug("[DETECTOR] %s does not accept detection_results (legacy signature)", detector_name)
-                result = detector.detect(host_audio, guest_audio)
+                result = detector.detect(audio)
 
             detection_results[detector_name] = result
 
@@ -178,7 +162,7 @@ class ProcessingPipeline:
             subfunction_start = None
 
             if processor_name == "AudioNormalizer":
-                friendly = "Normalize Guest Audio"
+                friendly = "Normalize Audio"
             elif processor_name == "SegmentRemover":
                 friendly = "Remove pauses"
             elif processor_name == "WordMuter":
@@ -191,7 +175,7 @@ class ProcessingPipeline:
                 logger.info(f"[FUNCTION START] {friendly}")
                 subfunction_start = time.time()
 
-            manifest = processor.process(manifest, host_audio, guest_audio, detection_results)
+            manifest = processor.process(manifest, audio, detection_results)
 
             # Capture elapsed time immediately after processor runs (before detail logging)
             elapsed = time.time() - (subfunction_start or 0.0) if friendly else None
@@ -202,22 +186,19 @@ class ProcessingPipeline:
                 removals = getattr(manifest, "pause_removals", []) or []
                 total_removed_seconds = sum(end - start for start, end in removals)
                 logger.info(
-                    f"[DETAIL] Removed {len(removals)} pause(s) from both Guest and Host videos | "
+                    f"[DETAIL] Removed {len(removals)} pause(s) | "
                     f"Total time removed: {format_time_cut(total_removed_seconds)}"
                 )
             elif processor_name == "WordMuter":
                 word_mute_details = getattr(manifest, "word_mute_details", []) or []
                 _log_filler_word_details(word_mute_details)
             elif processor_name == "AudioNormalizer":
-                gain_db = getattr(manifest, "guest_audio_gain_db_applied", None)
-                gain_est_db = getattr(manifest, "guest_audio_gain_db_estimate", None)
-                if gain_db is not None:
-                    logger.info(f"[DETAIL] Guest audio adjusted: {gain_db:+.1f} dB")
-                elif gain_est_db is not None:
-                    logger.info(f"[DETAIL] Guest audio adjusted (estimated): {gain_est_db:+.1f} dB")
+                gain_est_db = getattr(manifest, "audio_gain_db_estimate", None)
+                if gain_est_db is not None:
+                    logger.info(f"[DETAIL] Audio adjusted (estimated): {gain_est_db:+.1f} dB")
             elif processor_name == "SpikeFixer":
                 spike_regions = detection_results.get("spike_fixer_detector", []) or []
-                logger.info(f"[DETAIL] Fixed {len(spike_regions)} audio spike(s) in guest video")
+                logger.info(f"[DETAIL] Fixed {len(spike_regions)} audio spike(s)")
 
             # Log [FUNCTION COMPLETE] AFTER all [DETAIL] lines
             if friendly and elapsed is not None:
@@ -230,16 +211,10 @@ class ProcessingPipeline:
         logger.info("Phase 3: Rendering (This may take time)")
         phase3_start = time.time()
         # Output container is MP4 regardless of input container.
-        host_out = make_processed_output_path(host_video_path) if render_host else None
-        guest_out = make_processed_output_path(guest_video_path) if render_guest else None
+        out = make_processed_output_path(video_path) if render else None
 
         logger.info("[FUNCTION START] Render videos")
-        video_renderer.render_project(
-            host_video_path, guest_video_path,
-            manifest,
-            host_out, guest_out,
-            self.config
-        )
+        video_renderer.render_project(video_path, manifest, out, self.config)
 
         phase3_duration = time.time() - phase3_start
         logger.info(f"[FUNCTION COMPLETE] Render videos - Took {format_duration(phase3_duration)}")
@@ -248,4 +223,4 @@ class ProcessingPipeline:
         # ── End-of-run filler word summary ────────────────────────────────
         _log_filler_word_summary(manifest)
 
-        return host_out, guest_out
+        return out

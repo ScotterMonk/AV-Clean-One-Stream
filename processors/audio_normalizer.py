@@ -5,7 +5,7 @@ from utils.logger import get_logger
 
 # Modified by gpt-5.2 | 2026-01-20_01
 class AudioNormalizer(BaseProcessor):
-    def process(self, manifest, host_audio, guest_audio, detection_results):
+    def process(self, manifest, audio, detection_results):
         logger = get_logger(__name__)
         if not detection_results:
             raise ValueError(
@@ -20,65 +20,27 @@ class AudioNormalizer(BaseProcessor):
                 "Ensure AudioLevelDetector runs before AudioNormalizer."
             )
 
-        # Note: host_audio/guest_audio are intentionally unused here.
+        # Note: audio param is intentionally unused here.
         # Normalization params are precomputed in AudioLevelDetector.
+        # NOTE: MATCH_HOST normalization mode removed — single-stream workflow.
 
-        mode = audio_level_results.get("mode")
-        host_lufs = audio_level_results.get("host_lufs")
-        guest_lufs = audio_level_results.get("guest_lufs")
-        if mode is None or host_lufs is None or guest_lufs is None:
+        lufs = audio_level_results.get("lufs")
+        target_lufs = audio_level_results.get("target_lufs")
+        loudnorm_params = audio_level_results.get("loudnorm_params")
+        if lufs is None or target_lufs is None or not loudnorm_params:
             raise ValueError(
                 "AudioNormalizer received incomplete audio_level_detector results. "
-                "Expected keys: mode, host_lufs, guest_lufs."
+                "Expected keys: lufs, target_lufs, loudnorm_params."
             )
 
         logger.info(
-            f"[PROCESSOR] Audio analysis - Host: {host_lufs:.1f} LUFS, Guest: {guest_lufs:.1f} LUFS"
+            f"[PROCESSOR] Audio analysis: {lufs:.1f} LUFS"
         )
 
-        if mode == "MATCH_HOST":
-            guest_gain_db = audio_level_results.get("guest_gain_db")
-            if guest_gain_db is None:
-                raise ValueError(
-                    "AudioNormalizer missing required key in audio_level_detector results: guest_gain_db "
-                    "(required for MATCH_HOST)."
-                )
-
-            logger.info(
-                f"[PROCESSOR] Normalized guest audio - Applied {guest_gain_db:+.1f} dB gain to match host"
-            )
-
-            # Used by the pipeline for end-of-subfunction summary logging.
-            manifest.guest_audio_gain_db_applied = float(guest_gain_db)
-
-            # Host gets NO filter (it is the reference)
-            # Guest gets volume filter
-            manifest.add_guest_filter("volume", volume=f"{guest_gain_db}dB")
-
-        elif mode == "STANDARD_LUFS":
-            target_lufs = audio_level_results.get("target_lufs")
-            loudnorm_params = audio_level_results.get("loudnorm_params")
-            if target_lufs is None or not loudnorm_params:
-                raise ValueError(
-                    "AudioNormalizer missing required keys in audio_level_detector results for STANDARD_LUFS: "
-                    "target_lufs and loudnorm_params."
-                )
-
-            logger.info(
-                f"[PROCESSOR] Normalized both tracks - Target: {target_lufs} LUFS (STANDARD_LUFS mode)"
-            )
-
-            # Loudnorm is dynamic; keep an estimate for summary logging.
-            manifest.guest_audio_gain_db_estimate = float(target_lufs - guest_lufs)
-
-            # Apply identical loudnorm to BOTH (params computed during detection)
-            manifest.add_host_filter("loudnorm", **loudnorm_params)
-            manifest.add_guest_filter("loudnorm", **loudnorm_params)
-
-        else:
-            raise ValueError(
-                f"AudioNormalizer received unsupported normalization mode from audio_level_detector: {mode!r}"
-            )
+        logger.info(f"[PROCESSOR] Normalized audio — Target: {target_lufs} LUFS")
+        # Estimate for summary logging (loudnorm is dynamic, so this is approximate)
+        manifest.audio_gain_db_estimate = float(target_lufs - lufs)
+        manifest.add_filter("loudnorm", **loudnorm_params)
 
         return manifest
     

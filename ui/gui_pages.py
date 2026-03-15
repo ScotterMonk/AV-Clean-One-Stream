@@ -38,6 +38,7 @@ class MainPage(tk.Frame):
     # - Does not run ffmpeg / processing directly; delegates to the app.
     # - Does not own file row state; reads rows from app._rows.
     def __init__(self, parent: tk.Widget, app) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         # Modified by coder-sr | 2026-03-14 — removed Actions/Controls panes; PROCESS moved to top nav
         super().__init__(parent, bg=app._palette["bg"])
         self._app = app
@@ -58,7 +59,7 @@ class MainPage(tk.Frame):
 
         # Files
         # -----
-        # Two-row table where each row represents an input role: host / guest.
+        # Single-row tables for one input and one output in the simplified flow.
         files_panel = app._make_panel(grid, "Files")
         files_panel.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, panel_external_padding_y))
         self._build_files(files_panel.body)
@@ -94,6 +95,7 @@ class MainPage(tk.Frame):
         self._build_progress(progress_panel.body)
 
     def _build_files(self, parent: tk.Frame) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         # Modified by gpt-5.4 | 2026-03-08
         # Modified by gpt-5.4 | 2026-03-07
         app = self._app
@@ -111,13 +113,12 @@ class MainPage(tk.Frame):
         self._build_modded_files_section(modded_frame)
 
     def _build_file_row(self, parent: tk.Frame, row_index: int, role: str) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         # Modified by gpt-5.4 | 2026-03-08
         # Modified by gpt-5.4 | 2026-03-07
         app = self._app
 
-        # Label the browse button by role so users always know which input they
-        # are picking (host vs guest).
-        btn_text = "BROWSE HOST" if role == "host" else "BROWSE GUEST"
+        btn_text = "BROWSE"
         app._create_file_row(parent, row_index=row_index, role=role, button_text=btn_text)
 
     # Created by gpt-5.4 | 2026-03-08
@@ -154,6 +155,7 @@ class MainPage(tk.Frame):
 
     # Created by gpt-5.4 | 2026-03-07
     def _build_source_files_section(self, parent: tk.Frame) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         # Modified by gpt-5.4 | 2026-03-08
         app = self._app
         hdr = app._mono(weight="bold")
@@ -170,11 +172,11 @@ class MainPage(tk.Frame):
         self._create_files_header_cell(grid, 0, 2, "SIZE")
         self._create_files_header_cell(grid, 0, 3, "LENGTH")
 
-        self._build_file_row(grid, row_index=1, role="host")
-        self._build_file_row(grid, row_index=2, role="guest")
+        self._build_file_row(grid, row_index=1, role="input")
 
     # Created by gpt-5.4 | 2026-03-07
     def _build_modded_files_section(self, parent: tk.Frame) -> None:
+        # Modified by gpt-5.4 | 2026-03-15
         # Modified by gpt-5.4 | 2026-03-08
         app = self._app
         hdr = app._mono(weight="bold")
@@ -191,8 +193,7 @@ class MainPage(tk.Frame):
         self._create_files_header_cell(grid, 0, 2, "SIZE")
         self._create_files_header_cell(grid, 0, 3, "LENGTH")
 
-        app._create_output_row(grid, row_index=1, role="host", label_text="HOST")
-        app._create_output_row(grid, row_index=2, role="guest", label_text="GUEST")
+        app._create_output_row(grid, row_index=1, role="output", label_text="OUTPUT")
 
     def _build_logs(self, parent: tk.Frame) -> None:
         # Modified by gpt-5.2 | 2026-01-12_01
@@ -287,12 +288,8 @@ class MainPage(tk.Frame):
         self._log_text.configure(state="disabled")
 
     def _build_progress(self, parent: tk.Frame) -> None:
-        # Modified by coder-sr | 2026-03-14 — retasked as two-column FILLER WORDS FOUND pane
+        # Modified by gpt-5.4 | 2026-03-15
         app = self._app
-
-        # State: tracks last explicitly labelled host/guest header so subsequent
-        # indented per-word lines (which have no track marker) route correctly.
-        self._filler_current_track: str | None = None
 
         # Outer wrapper adds a distinct surface edge.
         wrap = tk.Frame(
@@ -303,50 +300,7 @@ class MainPage(tk.Frame):
         )
         wrap.pack(fill="both", expand=True)
 
-        # Two-column grid: HOST (col 0) | thin divider (col 1) | GUEST (col 2)
-        grid = tk.Frame(wrap, bg=app._palette["panel"])
-        grid.pack(fill="both", expand=True)
-        grid.columnconfigure(0, weight=1)
-        grid.columnconfigure(1, weight=0)  # divider — fixed 1 px wide
-        grid.columnconfigure(2, weight=1)
-        grid.rowconfigure(0, weight=0)     # sub-pane labels
-        grid.rowconfigure(1, weight=1)     # text areas
-
-        # Sub-pane label — HOST
-        tk.Label(
-            grid,
-            text="HOST",
-            font=app._mono(weight="bold"),
-            bg=app._palette["panel2"],
-            fg=app._ui_colors["accent_font"],
-            anchor="w",
-            padx=8,
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 2))
-
-        # Vertical divider between HOST and GUEST
-        tk.Frame(grid, bg=app._palette["edge2"], width=1).grid(
-            row=0, column=1, rowspan=2, sticky="ns", padx=4
-        )
-
-        # Sub-pane label — GUEST
-        tk.Label(
-            grid,
-            text="GUEST",
-            font=app._mono(weight="bold"),
-            bg=app._palette["panel2"],
-            fg=app._ui_colors["accent_font"],
-            anchor="w",
-            padx=8,
-        ).grid(row=0, column=2, sticky="ew", pady=(0, 2))
-
-        # Text areas
-        host_frame = tk.Frame(grid, bg=app._palette["panel"])
-        host_frame.grid(row=1, column=0, sticky="nsew")
-        self._filler_host_text = self._build_filler_subpane(host_frame)
-
-        guest_frame = tk.Frame(grid, bg=app._palette["panel"])
-        guest_frame.grid(row=1, column=2, sticky="nsew")
-        self._filler_guest_text = self._build_filler_subpane(guest_frame)
+        self._filler_text = self._build_filler_subpane(wrap)
 
     def _build_filler_subpane(self, parent: tk.Frame) -> tk.Text:
         """Build a scrollable read-only text area inside *parent*; return the Text widget."""
@@ -424,12 +378,10 @@ class MainPage(tk.Frame):
         self._log_text.configure(state="disabled")
 
     def clear_progress_view(self) -> None:
-        # Modified by coder-sr | 2026-03-14 — clears both HOST and GUEST sub-panes
-        self._filler_current_track = None
-        for txt in (self._filler_host_text, self._filler_guest_text):
-            txt.configure(state="normal")
-            txt.delete("1.0", "end")
-            txt.configure(state="disabled")
+        # Modified by gpt-5.4 | 2026-03-15
+        self._filler_text.configure(state="normal")
+        self._filler_text.delete("1.0", "end")
+        self._filler_text.configure(state="disabled")
 
     def append_log_view(self, text: str) -> None:
         # Modified by gpt-5.2 | 2026-01-12_01
@@ -440,28 +392,14 @@ class MainPage(tk.Frame):
         self._log_text.configure(state="disabled")
 
     def append_progress_view(self, text: str) -> None:
-        # Modified by coder-sr | 2026-03-14 — routes filler-word lines to HOST or GUEST sub-pane
-        from ui.gui_process_helpers import filler_line_is_filler, filler_line_track_hint
+        # Modified by gpt-5.4 | 2026-03-15
+        from ui.gui_process_helpers import filler_line_is_filler
 
         # Only display filler-word related lines; silently drop everything else.
         if not filler_line_is_filler(text):
             return
 
-        hint = filler_line_track_hint(text)
-        if hint == "context":
-            # Indented per-word line — route using the last seen explicit track.
-            # Fall back to "both" if state is unknown (e.g. first run, cleared).
-            track = self._filler_current_track or "both"
-        else:
-            track = hint
-            # Keep state current so following per-word lines route correctly.
-            if hint in ("host", "guest"):
-                self._filler_current_track = hint
-
-        if track in ("host", "both"):
-            self._filler_text_append(self._filler_host_text, text)
-        if track in ("guest", "both"):
-            self._filler_text_append(self._filler_guest_text, text)
+        self._filler_text_append(self._filler_text, text)
 
     def _filler_text_append(self, widget: tk.Text, text: str) -> None:
         """Append *text* to a filler sub-pane, ensuring it ends with a newline."""

@@ -31,7 +31,7 @@ def make_processed_output_path(input_video_path: str, *, output_ext: str = ".mp4
     """Derive the default processed output path for an input video.
 
     Safety invariant: this must NEVER return a path equal to the input path.
-    The application must not overwrite the user's selected host/guest inputs.
+    The application must not overwrite the user's selected input.
     """
 
     p = Path(input_video_path)

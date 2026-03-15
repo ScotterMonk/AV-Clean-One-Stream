@@ -31,7 +31,7 @@ class WordMuter(BaseProcessor):
     """
 
     def process(
-        self, manifest: EditManifest, host_audio, guest_audio, detection_results
+        self, manifest: EditManifest, audio, detection_results
     ) -> EditManifest:
         # Mark that word-muting ran for this pipeline execution.
         manifest.word_mute_applied = True
@@ -144,20 +144,7 @@ class WordMuter(BaseProcessor):
             end_s = float(detail["end_sec"])
 
         enable_expr = f"between(t,{start_s:.3f},{end_s:.3f})"
-        track = str(detail.get("track") or "").lower()
-
-        if track == "host":
-            manifest.add_host_filter("volume", volume=0, enable=enable_expr)
-        elif track == "guest":
-            manifest.add_guest_filter("volume", volume=0, enable=enable_expr)
-        else:
-            logger.warning(
-                "[WordMuter] Cannot mute word %r at %.3f-%.3fs: unknown track %r",
-                detail.get("text", ""),
-                start_s,
-                end_s,
-                detail.get("track"),
-            )
+        manifest.add_filter("volume", volume=0, enable=enable_expr)
 
     def get_name(self) -> str:
         return "WordMuter"

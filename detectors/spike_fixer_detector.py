@@ -1,6 +1,6 @@
 """SpikeFixerDetector.
 
-Detects whether the guest track contains peaks above `spike_threshold_db`.
+Detects whether the audio track contains peaks above `spike_threshold_db`.
 
 Performance note (normalize-before-spike-detect / P3-T15):
  - This detector may run an FFmpeg *analysis pass* (audio-only) to evaluate peak levels
@@ -49,15 +49,14 @@ class SpikeFixerDetector(BaseDetector):
     _FFMPEG_ANALYSIS_CACHE_TTL_SECONDS = 60.0
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_02
-    _ffmpeg_analysis_cache: Dict[Tuple[str, str, str, int, int], Tuple[float, List[float]]] = {}
+    _ffmpeg_analysis_cache: Dict[Tuple[str, str, int, int], Tuple[float, List[float]]] = {}
     
     # [Modified] by gpt-5.2 | 2026-01-20_01
-    def detect(self, host_audio, guest_audio, detection_results: Dict[str, Any] | None = None) -> List[Tuple[float, float]]:
-        """Detect audio spikes in guest audio.
+    def detect(self, audio, detection_results: Dict[str, Any] | None = None) -> List[Tuple[float, float]]:
+        """Detect audio spikes in audio track.
 
         Args:
-            host_audio: Pydub AudioSegment for host.
-            guest_audio: Pydub AudioSegment for guest.
+            audio: Pydub AudioSegment for the track being analyzed.
             detection_results: Optional accumulated detector results. When
                 `detection_results["audio_level_detector"]` is present, we attempt an
                 FFmpeg post-normalization analysis pass.
@@ -78,18 +77,18 @@ class SpikeFixerDetector(BaseDetector):
                 "[DETECTOR] SpikeFixerDetector: audio_level_detector results missing; "
                 "falling back to pre-normalization spike detection"
             )
-            return self._detect_pre_normalization(host_audio, guest_audio)
+            return self._detect_pre_normalization(audio)
 
-        guest_video_path = self._guest_video_path_from_detection_results(detection_results or {})
-        if not guest_video_path:
+        video_path = self._video_path_from_detection_results(detection_results or {})
+        if not video_path:
             logger.warning(
-                "[DETECTOR] SpikeFixerDetector: guest video path missing in detection_results; "
+                "[DETECTOR] SpikeFixerDetector: video path missing in detection_results; "
                 "falling back to pre-normalization spike detection"
             )
-            return self._detect_pre_normalization(host_audio, guest_audio)
+            return self._detect_pre_normalization(audio)
 
         try:
-            peak_series_db = self._detect_post_normalization_peak_series_db(guest_video_path, audio_level)
+            peak_series_db = self._detect_post_normalization_peak_series_db(video_path, audio_level)
         except Exception as e:
             logger.warning(
                 "[DETECTOR] SpikeFixerDetector: FFmpeg post-normalization analysis failed; "
@@ -97,9 +96,9 @@ class SpikeFixerDetector(BaseDetector):
                 e,
             )
             logger.debug("SpikeFixerDetector FFmpeg analysis exception", exc_info=True)
-            return self._detect_pre_normalization(host_audio, guest_audio)
+            return self._detect_pre_normalization(audio)
 
-        duration_seconds = float(getattr(guest_audio, "duration_seconds", 0.0) or 0.0)
+        duration_seconds = float(getattr(audio, "duration_seconds", 0.0) or 0.0)
         spike_regions = self._spike_regions_from_peak_series(
             peak_series_db,
             reset_seconds=1.0,
@@ -123,13 +122,10 @@ class SpikeFixerDetector(BaseDetector):
         return spike_regions
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_01
-    def _detect_pre_normalization(self, host_audio, guest_audio) -> List[Tuple[float, float]]:
+    def _detect_pre_normalization(self, audio) -> List[Tuple[float, float]]:
         """Original pydub/numpy spike detector (pre-normalization)."""
 
         logger = get_logger(__name__)
-
-        # Only analyze guest audio for spikes.
-        audio = guest_audio
 
         threshold_db = float((self.config or {}).get("spike_threshold_db", -6))
         window_ms = float((self.config or {}).get("spike_window_ms", 50))
@@ -161,29 +157,29 @@ class SpikeFixerDetector(BaseDetector):
         ]
 
         merged = self._merge_adjacent_regions(spike_regions, gap_threshold=0.1)
-        logger.info("[DETECTOR] Found %s audio spike regions in guest video", len(merged))
+        logger.info("[DETECTOR] Found %s audio spike regions in video", len(merged))
         return merged
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_01
     @staticmethod
-    def _guest_video_path_from_detection_results(detection_results: Dict[str, Any]) -> str | None:
-        """Best-effort lookup for guest input path.
+    def _video_path_from_detection_results(detection_results: Dict[str, Any]) -> str | None:
+        """Best-effort lookup for the input video path.
 
-        T07 will pass `detection_results` into detectors; this function is tolerant
-        to a variety of possible shapes.
+        Checks the canonical `video_path` key first, then backward-compatible
+        guest-specific keys for callers that have not yet migrated.
         """
 
-        # Direct keys
-        for k in ("guest_video_path", "guest_path", "_guest_video_path"):
+        # Direct keys — canonical first, then backward-compatible
+        for k in ("video_path", "guest_video_path", "guest_path", "_guest_video_path"):
             v = detection_results.get(k)
             if isinstance(v, str) and v.strip():
                 return v
 
-        # Nested shapes
+        # Nested shapes — canonical first, then backward-compatible
         for k in ("media", "_media", "paths", "_paths"):
             block = detection_results.get(k)
             if isinstance(block, dict):
-                for kk in ("guest", "guest_video_path", "guest_path"):
+                for kk in ("video_path", "guest", "guest_video_path", "guest_path"):
                     v = block.get(kk)
                     if isinstance(v, str) and v.strip():
                         return v
@@ -191,35 +187,27 @@ class SpikeFixerDetector(BaseDetector):
         return None
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_01
-    def _detect_post_normalization_peak_series_db(self, guest_video_path: str, audio_level: Dict[str, Any]) -> List[float]:
+    def _detect_post_normalization_peak_series_db(self, video_path: str, audio_level: Dict[str, Any]) -> List[float]:
         """Run FFmpeg analysis pass and return per-reset peak dBFS series (post-normalization)."""
 
         logger = get_logger(__name__)
 
-        mode = str(audio_level.get("mode", ""))
-        if mode == "MATCH_HOST":
-            gain_db = float(audio_level.get("guest_gain_db"))
-            af = f"volume={gain_db}dB,astats=metadata=1:reset=1"
-        elif mode == "STANDARD_LUFS":
-            target = float(audio_level.get("target_lufs"))
-            params = audio_level.get("loudnorm_params") or {}
-            tp = float(params.get("TP"))
-            lra = float(params.get("LRA"))
-            af = f"loudnorm=I={target}:TP={tp}:LRA={lra},astats=metadata=1:reset=1"
-        else:
-            raise ValueError(f"Unknown normalization mode in audio_level_detector results: {mode}")
-
+        # Build loudnorm filter using STANDARD_LUFS parameters from audio_level_detector.
         # IMPORTANT:
         # This analysis filter chain MUST match the render-time normalization chain.
         # Any mismatch means analyzed peaks will not reflect the rendered output.
+        target = float(audio_level.get("target_lufs"))
+        params = audio_level.get("loudnorm_params") or {}
+        tp = float(params.get("TP"))
+        lra = float(params.get("LRA"))
+        af = f"loudnorm=I={target}:TP={tp}:LRA={lra},astats=metadata=1:reset=1"
 
-        cache_key = self._ffmpeg_analysis_cache_key(guest_video_path, mode, af)
+        cache_key = self._ffmpeg_analysis_cache_key(video_path, af)
         cached = self._ffmpeg_analysis_cache_get(cache_key)
         if cached is not None:
             logger.debug(
-                "SpikeFixerDetector FFmpeg analysis cache hit: path=%s mode=%s",
-                guest_video_path,
-                mode,
+                "SpikeFixerDetector FFmpeg analysis cache hit: path=%s",
+                video_path,
             )
             return list(cached)
 
@@ -230,7 +218,7 @@ class SpikeFixerDetector(BaseDetector):
             "-loglevel",
             "info",
             "-i",
-            str(guest_video_path),
+            str(video_path),
             "-vn",
             "-af",
             af,
@@ -264,7 +252,7 @@ class SpikeFixerDetector(BaseDetector):
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_02
     @classmethod
-    def _ffmpeg_analysis_cache_key(cls, guest_video_path: str, mode: str, af: str) -> Tuple[str, str, str, int, int]:
+    def _ffmpeg_analysis_cache_key(cls, video_path: str, af: str) -> Tuple[str, str, int, int]:
         """Build a cache key for FFmpeg analysis results.
 
         Cache safety goals:
@@ -273,7 +261,7 @@ class SpikeFixerDetector(BaseDetector):
             - Keep it small: bounded by `_FFMPEG_ANALYSIS_CACHE_MAX_ITEMS`.
         """
 
-        p = Path(guest_video_path)
+        p = Path(video_path)
         try:
             st = p.stat()
             mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
@@ -283,11 +271,11 @@ class SpikeFixerDetector(BaseDetector):
             mtime_ns = -1
             size = -1
 
-        return (str(p), str(mode), str(af), mtime_ns, size)
+        return (str(p), str(af), mtime_ns, size)
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_02
     @classmethod
-    def _ffmpeg_analysis_cache_get(cls, key: Tuple[str, str, str, int, int]) -> List[float] | None:
+    def _ffmpeg_analysis_cache_get(cls, key: Tuple[str, str, int, int]) -> List[float] | None:
         v = cls._ffmpeg_analysis_cache.get(key)
         if not v:
             return None
@@ -301,7 +289,7 @@ class SpikeFixerDetector(BaseDetector):
 
     # [Created-or-Modified] by gpt-5.2 | 2026-01-20_02
     @classmethod
-    def _ffmpeg_analysis_cache_set(cls, key: Tuple[str, str, str, int, int], series: List[float]) -> None:
+    def _ffmpeg_analysis_cache_set(cls, key: Tuple[str, str, int, int], series: List[float]) -> None:
         # Basic TTL + small-size eviction. This intentionally does NOT persist to disk.
         now = time.time()
         cls._ffmpeg_analysis_cache[key] = (now, list(series))

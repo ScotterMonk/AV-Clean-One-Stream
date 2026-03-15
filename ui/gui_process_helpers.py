@@ -45,47 +45,15 @@ def filler_line_is_filler(line: str) -> bool:
     )
 
 
-# Created by coder-sr | 2026-03-14
-def filler_line_track_hint(line: str) -> str:
-    """Return routing hint for a filler-word line.
-
-    Returns:
-        "host"    — line belongs to HOST sub-pane
-        "guest"   — line belongs to GUEST sub-pane
-        "both"    — line belongs in both sub-panes
-        "context" — no explicit track; caller should use last-seen track state
-                    (e.g. indented per-word lines like "  00:01:05 'uh' (confidence:...)")
-    """
-    low = line.lower()
-
-    # "either track" lines go into both sub-panes
-    if "either track" in low:
-        return "both"
-
-    has_host = "host" in low
-    has_guest = "guest" in low
-
-    if has_host and not has_guest:
-        return "host"
-    if has_guest and not has_host:
-        return "guest"
-    if has_host and has_guest:
-        # Rare edge case — route to both sub-panes to be safe
-        return "both"
-
-    # No explicit track indicator (indented per-word detail lines)
-    return "context"
-
-
 # Created by gpt-5.4 | 2026-03-07
-def result_line_paths_parse(line: str) -> tuple[str | None, str | None]:
-    """Extract host and guest output paths from a [RESULT] line."""
+def result_line_paths_parse(line: str) -> str | None:
+    """Extract output path from a [RESULT] line."""
 
     if not line.startswith("[RESULT]"):
-        return None, None
+        return None
 
-    match = re.search(r"host=(.+?)\s+guest=(.+)$", line.strip())
+    match = re.search(r"output=(.+)$", line.strip())
     if match is None:
-        return None, None
+        return None
 
-    return match.group(1).strip(), match.group(2).strip()
+    return match.group(1).strip()

@@ -1,9 +1,8 @@
 # detectors/filler_word_detector.py
 #
-# Detects specific words/phrases (e.g. "uh", "uhm", "you know") in host and
-# guest audio tracks via the AssemblyAI transcription API.
-# Returns a combined list of (start_sec, end_sec) tuples for every match —
-# one entry per word occurrence regardless of which speaker said it.
+# Detects specific words/phrases (e.g. "uh", "uhm", "you know") in a single
+# audio track via the AssemblyAI transcription API.
+# Returns a list of (start_sec, end_sec) tuples for every match found.
 #
 # Required env vars:  AAI_SETTINGS_API_KEY, AAI_SETTINGS_BASE_URL
 # Config key:         WORDS_TO_REMOVE['words_to_remove']  (list of str)
@@ -28,7 +27,7 @@ _POLL_INTERVAL_SEC = 3
 # Modified by gpt-5.4 | 2026-03-08
 class FillerWordDetector(BaseDetector):
     """
-    Transcribes both audio tracks via AssemblyAI and returns the time ranges
+    Transcribes a single audio track via AssemblyAI and returns the time ranges
     of every configured word/phrase that should be removed.
 
     Multi-word phrases (e.g. "you know") are matched by comparing consecutive
@@ -41,19 +40,18 @@ class FillerWordDetector(BaseDetector):
     # ── Public interface ───────────────────────────────────────────────────
 
     # Modified by gpt-5.4 | 2026-03-08
-    def detect(self, host_audio, guest_audio, detection_results=None) -> List[Dict[str, Any]]:
+    def detect(self, audio, detection_results=None) -> List[Dict[str, Any]]:
         """
-        Transcribe both tracks and return merged word-removal ranges.
+        Transcribe the audio track and return word-removal ranges.
 
         Args:
-            host_audio:        pydub AudioSegment for the host track.
-            guest_audio:       pydub AudioSegment for the guest track.
+            audio:             pydub AudioSegment for the track.
             detection_results: accumulated pipeline results dict; used to
-                               resolve video paths for transcript file output.
+                               resolve the video path for transcript file output.
 
         Returns:
-            Combined list of (start_sec, end_sec) tuples from both tracks,
-            unsorted.  Caller (WordMuter) is responsible for sorting/merging.
+            List of segment dicts with start_sec/end_sec for matched words.
+            Caller (WordMuter) is responsible for sorting/merging.
             High-confidence filtering is applied here.
         """
         api_key = os.getenv("AAI_SETTINGS_API_KEY", "").strip()
@@ -76,29 +74,20 @@ class FillerWordDetector(BaseDetector):
             ", ".join(repr(w) for w in target_words),
         )
 
-        # Resolve video paths so _process_track can place transcript files
+        # Resolve video path so _process_track can place transcript files
         # beside the processed output (same parent directory as input video).
         dr = detection_results or {}
-        host_video_path = dr.get("host_video_path")
-        guest_video_path = dr.get("guest_video_path")
+        video_path = dr.get("video_path")
 
         headers = {"authorization": api_key}
-        segments: List[Dict[str, Any]] = []
 
-        for label, audio, video_path in (
-            ("host", host_audio, host_video_path),
-            ("guest", guest_audio, guest_video_path),
-        ):
-            track_segments = self._process_track(
-                label, audio, target_words, base_url, headers, video_path
-            )
-            muted = [s for s in track_segments if s.get("action") == "mute"]
-            skipped = [s for s in track_segments if s.get("action") == "skipped"]
-            logger.info(
-                "[DETAIL] Filler words: %s track — %d found, %d muted, %d skipped",
-                label, len(track_segments), len(muted), len(skipped),
-            )
-            segments.extend(track_segments)
+        segments = self._process_track("audio", audio, target_words, base_url, headers, video_path)
+        muted = [s for s in segments if s.get("action") == "mute"]
+        skipped = [s for s in segments if s.get("action") == "skipped"]
+        logger.info(
+            "[DETAIL] Filler words: %d found, %d muted, %d skipped",
+            len(segments), len(muted), len(skipped),
+        )
 
         return segments
 
@@ -222,14 +211,14 @@ class FillerWordDetector(BaseDetector):
     def _save_filler_words(
         self, matches: List[Dict[str, Any]], label: str, video_path: str
     ) -> None:
-        """Write detected filler words to ``{label}_filler_words.txt`` beside
+        """Write detected filler words to ``filler_words.txt`` beside
         the input video.  Overwrites any file from a prior run.
 
         Each line format:
             hh:mm:ss:ms - "{word}" - confidence: 0.9500 - muted
         """
         out_dir = os.path.dirname(os.path.abspath(video_path))
-        out_path = os.path.join(out_dir, f"{label}_filler_words.txt")
+        out_path = os.path.join(out_dir, "filler_words.txt")
         lines = []
         for m in matches:
             start_sec = float(m.get("start_sec", 0.0))
@@ -340,17 +329,8 @@ class FillerWordDetector(BaseDetector):
             effective_required = base_required - (word_count * confidence_bonus_per_word)
         So every word in the phrase lowers the bar equally — a 1-word phrase
         gets a -0.05 bonus, 2-word gets -0.10, 3-word gets -0.15, etc.
-
-        Unknown tracks pass through with ``action = "mute"`` (no threshold).
         """
-        if track == "host":
-            required = float(WORDS_TO_REMOVE.get("confidence_required_host", 0.0) or 0.0)
-        elif track == "guest":
-            required = float(WORDS_TO_REMOVE.get("confidence_required_guest", 0.0) or 0.0)
-        else:
-            for m in matches:
-                m["action"] = "mute"
-            return matches
+        required = float(WORDS_TO_REMOVE.get("confidence_required", 0.0) or 0.0)
 
         bonus_per_word = float(
             WORDS_TO_REMOVE.get("confidence_bonus_per_word", 0.0) or 0.0
