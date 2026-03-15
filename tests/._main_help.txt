@@ -1,0 +1,13 @@
+pyloudnorm not found. LUFS calculations will be approximated via RMS.
+Usage: main.py [OPTIONS]
+
+  Video Automation Tool: Sync-safe cleaning and normalization.
+
+Options:
+  --host TEXT                     Host video path  [required]
+  --guest TEXT                    Guest video path  [required]
+  --action [ALL|NORMALIZE_GUEST_AUDIO|REMOVE_PAUSES]
+                                  Which action to run  [default: ALL]
+  --norm-mode [MATCH_HOST|STANDARD_LUFS]
+                                  Override normalization mode
+  --help                          Show this message and exit.

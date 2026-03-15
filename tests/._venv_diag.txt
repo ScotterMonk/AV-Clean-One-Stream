@@ -1,0 +1,31 @@
+== python -V ==
+Python 3.13.9
+== sys info ==
+exe D:\Dropbox\projects\AV-clean-one-stream\app\venv\Scripts\python.exe
+prefix D:\Dropbox\projects\AV-clean-one-stream\app\venv
+base_prefix C:\Python313
+version 3.13.9 (tags/v3.13.9:8183fa5, Oct 14 2025, 14:09:13) [MSC v.1944 64 bit (AMD64)]
+== pyvenv.cfg ==
+home = C:\Python313
+include-system-site-packages = false
+version = 3.13.9
+executable = C:\Python313\python.exe
+command = C:\Python313\python.exe -m venv D:\Dropbox\projects\AV-clean-one-stream\app\venv
+== import specs ==
+ensurepip ModuleSpec(name='ensurepip', loader=<_frozen_importlib_external.SourceFileLoader object at 0x000000000150F350>, origin='C:\\Python313\\Lib\\ensurepip\\__init__.py', submodule_search_locations=['C:\\Python313\\Lib\\ensurepip'])
+pip None
+== ensurepip --upgrade ==
+Looking in links: c:\Users\scott\AppData\Local\Temp\tmp2zrjb2f6
+Processing c:\users\scott\appdata\local\temp\tmp2zrjb2f6\pip-25.2-py3-none-any.whl
+Installing collected packages: pip
+Successfully installed pip-25.2
+== pip files in venv/Scripts ==
+
+Name        FullName
+----        --------
+pip.exe     D:\Dropbox\projects\AV-clean-one-stream\app\venv\Scripts\pip.exe
+pip3.13.exe D:\Dropbox\projects\AV-clean-one-stream\app\venv\Scripts\pip3.13.exe
+pip3.exe    D:\Dropbox\projects\AV-clean-one-stream\app\venv\Scripts\pip3.exe
+
+
+== DONE ==

@@ -1,0 +1,52 @@
+# Folder/file structure (diagram)
+```
+app/
+    app.py
+    main.py
+    config.py
+    AGENTS.md
+    activate.ps1
+    .gitignore
+    .roomodes
+    0.2.0/
+    tests/
+        test_imports.py
+    core/
+        __init__.py
+        interfaces.py
+        pipeline.py
+    analyzers/
+        audio_envelope.py
+        audio_level_analyzer.py
+    detectors/
+        __init__.py
+        base_detector.py
+        cross_talk_detector.py
+        filler_word_detector.py
+        silence_detector.py
+        spike_detector.py
+    processors/
+        __init__.py
+        base_processor.py
+        audio_fader.py
+        audio_limiter.py
+        audio_normalizer.py
+        segment_remover.py
+    io_/
+        __init__.py
+        audio_extractor.py
+        video_renderer.py
+    utils/
+        logger.py
+        time_helpers.py
+    # build/diagnostic artifacts (generated)
+    ._gui_compile_output.txt
+    ._gui_import_output.txt
+    ._gui_run_output.txt
+    ._main_help.txt
+    ._pip_ffmpeg_show.txt
+    ._pip_install.txt
+    ._pyaudioop_install.txt
+    ._pyprocs.txt
+    ._venv_diag.txt
+```

@@ -1,0 +1,2 @@
+Can't list ';'
+Can't list 'Get-Content'

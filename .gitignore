@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+
+# VSCode
+.vscode/
+*.code-workspace
+.roo/
+
+# Env
+venv/
+desktop.ini
+config.*
+.env
+activate.ps1
+
+# Misc
+notes/
+temp/
+temp_audio/
+test_results/
+test_videos/
+*.af
+*.afphoto
+
+# Local test media artifacts (do not commit large/binary files)
+test_videos/*.mp4
+
